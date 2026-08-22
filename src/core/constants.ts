@@ -1,6 +1,7 @@
 export const EASYTIER_HEADER_SIZE = 16;
 export const SERVER_PEER_ID = 10_000_001;
 export const WS_OPEN = 1;
+export const MAX_FORWARD_HOPS = 7;
 
 export enum PacketType {
 	Data = 1,

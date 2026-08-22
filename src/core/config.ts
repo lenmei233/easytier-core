@@ -10,6 +10,7 @@ export interface ServerConfig {
 	localPublicKeyBytes: Uint8Array;
 	maxFrameBytes: number;
 	allowLegacy: boolean;
+	doLocation?: string;
 }
 
 export interface EasyTierEnv {
@@ -20,7 +21,22 @@ export interface EasyTierEnv {
 	EASYTIER_HOSTNAME?: string;
 	MAX_FRAME_BYTES?: string;
 	EASYTIER_ENABLE_LEGACY?: string;
+	EASYTIER_DO_LOCATION?: string;
 }
+
+const DO_LOCATIONS = new Set([
+	"wnam",
+	"enam",
+	"sam",
+	"weur",
+	"eeur",
+	"apac",
+	"apac-ne",
+	"apac-se",
+	"oc",
+	"afr",
+	"me",
+]);
 
 const UTF8_ENCODER = new TextEncoder();
 
@@ -83,6 +99,13 @@ export function readServerConfig(env: EasyTierEnv): ServerConfig {
 		throw new Error("EASYTIER_HOSTNAME must be a non-empty string of at most 255 bytes");
 	}
 
+	const doLocation = env.EASYTIER_DO_LOCATION;
+	if (doLocation !== undefined && !DO_LOCATIONS.has(doLocation)) {
+		throw new Error(
+			`EASYTIER_DO_LOCATION must be one of ${[...DO_LOCATIONS].join(", ")}`,
+		);
+	}
+
 	return {
 		rooms,
 		hostname,
@@ -91,6 +114,7 @@ export function readServerConfig(env: EasyTierEnv): ServerConfig {
 		localPublicKeyBytes: publicBytes,
 		maxFrameBytes,
 		allowLegacy,
+		doLocation,
 	};
 }
 

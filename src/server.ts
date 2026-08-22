@@ -8,10 +8,10 @@ import {
 } from "./core/constants";
 import { type EasyTierEnv, type ServerConfig, readServerConfig } from "./core/config";
 import {
-	createPong,
+	bumpForwardCounter,
 	createPacket,
-	incrementForwardCounter,
 	parsePacket,
+	readHeader,
 	toUint8Array,
 } from "./core/packet";
 import { buildLegacyHandshakeResponse, parseLegacyHandshake } from "./core/legacy";
@@ -84,6 +84,11 @@ export class EasyTierServer extends DurableObject<EasyTierEnv> {
 		if (frame.byteLength > this.config.maxFrameBytes) {
 			throw new Error("EasyTier frame exceeds MAX_FRAME_BYTES");
 		}
+		// ready 阶段是转发热路径，走纯 TS 头解析避免 WASM 边界开销
+		if (connection.phase === "ready") {
+			this.handleReadyPacket(connection, frame);
+			return;
+		}
 		const packet = parsePacket(frame);
 		switch (connection.phase) {
 			case "undecided":
@@ -94,9 +99,6 @@ export class EasyTierServer extends DurableObject<EasyTierEnv> {
 				return;
 			case "msg3":
 				this.handleHandshakeMessage3(connection, frame, packet.header.packetType);
-				return;
-			case "ready":
-				this.handleReadyPacket(connection, frame, packet);
 				return;
 			case "closed":
 				return;
@@ -195,18 +197,14 @@ export class EasyTierServer extends DurableObject<EasyTierEnv> {
 		this.broadcastRouteUpdate(connection.networkName);
 	}
 
-	private handleReadyPacket(
-		connection: Connection,
-		frame: Uint8Array,
-		packet: ReturnType<typeof parsePacket>,
-	): void {
-		const { header } = packet;
+	private handleReadyPacket(connection: Connection, frame: Uint8Array): void {
+		const header = readHeader(frame);
 		if (header.toPeerId !== SERVER_PEER_ID) {
 			const target = this.findPeer(connection.networkName, header.toPeerId);
 			if (!target || target.phase !== "ready") return;
-			const forwarded = incrementForwardCounter(frame);
+			bumpForwardCounter(frame);
 			try {
-				target.send(forwarded);
+				target.send(frame);
 			} catch (error) {
 				console.warn("EasyTier forwarding target rejected", {
 					networkName: target.networkName,
@@ -228,7 +226,8 @@ export class EasyTierServer extends DurableObject<EasyTierEnv> {
 			throw new Error("EasyTier Ping and Pong packets must remain unencrypted");
 		}
 		if (header.packetType === PacketType.Ping) {
-			connection.send(createPong(frame));
+			frame[8] = PacketType.Pong;
+			connection.send(frame);
 			return;
 		}
 		if (header.packetType === PacketType.Pong) return;
@@ -248,7 +247,7 @@ export class EasyTierServer extends DurableObject<EasyTierEnv> {
 		} else {
 			// 客户端尚未通过路由信息得知本节点是公共服务器时会发加密包，丢弃等待其重试。
 			if ((header.flags & ENCRYPTED_FLAG) !== 0) return;
-			clearPayload = packet.payload;
+			clearPayload = frame.subarray(EASYTIER_HEADER_SIZE);
 		}
 
 		if (header.packetType === PacketType.RpcReq) {

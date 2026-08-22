@@ -5,7 +5,12 @@ import { errorMessage } from "./runtime/errors";
 
 export { EasyTierServer } from "./server";
 
-const DURABLE_OBJECT_NAME = "easytier-central-relay";
+// DO 创建后不会迁移位置；位置变更时换对象名以强制在新 hint 处重建
+function durableObjectName(doLocation: string | undefined): string {
+	return doLocation === undefined
+		? "easytier-central-relay"
+		: `easytier-central-relay-${doLocation}`;
+}
 
 export default {
 	async fetch(request: Request, env: EasyTierEnv): Promise<Response> {
@@ -41,15 +46,22 @@ export default {
 				headers: { Upgrade: "websocket" },
 			});
 		}
+		let config: ReturnType<typeof readServerConfig>;
 		try {
-			readServerConfig(env);
+			config = readServerConfig(env);
 		} catch (error) {
 			console.error("EasyTier configuration is invalid", {
 				error: errorMessage(error),
 			});
 			return new Response("Server configuration is invalid", { status: 503 });
 		}
-
-		return env.EASYTIER_SERVER.getByName(DURABLE_OBJECT_NAME).fetch(request);
+		const objectId = env.EASYTIER_SERVER.idFromName(durableObjectName(config.doLocation));
+		const stub = env.EASYTIER_SERVER.get(
+			objectId,
+			config.doLocation === undefined
+				? undefined
+				: { locationHint: config.doLocation as DurableObjectLocationHint },
+		);
+		return stub.fetch(request);
 	},
 } satisfies ExportedHandler<EasyTierEnv>;
