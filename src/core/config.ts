@@ -9,6 +9,7 @@ export interface ServerConfig {
 	localPublicKey: string;
 	localPublicKeyBytes: Uint8Array;
 	maxFrameBytes: number;
+	allowLegacy: boolean;
 }
 
 export interface EasyTierEnv {
@@ -18,6 +19,7 @@ export interface EasyTierEnv {
 	LOCAL_PUBLIC_KEY: string;
 	EASYTIER_HOSTNAME?: string;
 	MAX_FRAME_BYTES?: string;
+	EASYTIER_ENABLE_LEGACY?: string;
 }
 
 const UTF8_ENCODER = new TextEncoder();
@@ -34,11 +36,15 @@ export function readServerConfig(env: EasyTierEnv): ServerConfig {
 
 	let input: unknown;
 	try {
-		input = JSON.parse(env.EASYTIER_NETWORKS);
+		input = JSON.parse(env.EASYTIER_NETWORKS ?? "[]");
 	} catch {
 		throw new Error("EASYTIER_NETWORKS must be a JSON array");
 	}
-	if (!Array.isArray(input) || input.length === 0) {
+	if (!Array.isArray(input)) {
+		throw new Error("EASYTIER_NETWORKS must be a JSON array");
+	}
+	const allowLegacy = env.EASYTIER_ENABLE_LEGACY === "true";
+	if (input.length === 0 && !allowLegacy) {
 		throw new Error("EASYTIER_NETWORKS must configure at least one network");
 	}
 	const rooms = new Map<string, RoomConfig>();
@@ -84,6 +90,7 @@ export function readServerConfig(env: EasyTierEnv): ServerConfig {
 		localPublicKey: env.LOCAL_PUBLIC_KEY,
 		localPublicKeyBytes: publicBytes,
 		maxFrameBytes,
+		allowLegacy,
 	};
 }
 

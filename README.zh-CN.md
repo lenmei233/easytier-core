@@ -36,7 +36,8 @@ Durable Object
 - 周期维护 OSPF session 并刷新路由版本
 - 有界 RPC 分片、事务跟踪和防重放状态
 - 中继链路具备帧大小、跳数和发送容量限制
-- 不支持旧版明文模式，不共享跨网络状态
+- 可选启用 legacy 接入，支持普通客户端与动态公共房间
+- 不共享跨网络状态
 
 ## 部署
 
@@ -87,6 +88,7 @@ EASYTIER_HOSTNAME=edge
 | `LOCAL_PUBLIC_KEY` | 是 | 与私钥匹配的 Base64 编码 32 字节 X25519 公钥。 |
 | `EASYTIER_HOSTNAME` | 否 | 对外发布的 hostname，默认 `edge`，最大 255 个 UTF-8 字节。 |
 | `MAX_FRAME_BYTES` | 否 | 单帧上限，默认 1 MiB，允许范围为 1 KiB–16 MiB。 |
+| `EASYTIER_ENABLE_LEGACY` | 否 | 设为 `true` 后允许普通（非 secure 模式）EasyTier 客户端接入动态房间；启用后 `EASYTIER_NETWORKS` 允许为空。 |
 
 通过 Wrangler 写入生产凭据：
 
@@ -110,7 +112,24 @@ easytier-core \
 
 同一网络内的节点必须使用相同凭据。同一 Worker 上配置的不同网络不会共享路由、发现、RPC 或转发状态。
 
-只有完成 `NetworkSecretConfirmed` 认证的节点才能接入。该部署模型会明确拒绝旧版明文模式和仅凭 credential 接入的节点。
+只有完成 `NetworkSecretConfirmed` 认证的节点才能接入。除非启用 legacy 模式，该部署模型会明确拒绝旧版明文模式和仅凭 credential 接入的节点。
+
+## Legacy 模式
+
+设置 `EASYTIER_ENABLE_LEGACY=true` 后，未开启 `--secure-mode` 的普通 EasyTier 客户端也可以接入。房间按客户端声明的 `network_name` 动态创建，无需逐网络预配置——一个中继可同时服务任意数量的动态房间（例如 [Scaffolding-MC](https://github.com/Scaffolding-MC/Scaffolding-MC) 的联机房间网络）。
+
+```bash
+easytier-core \
+  --network-name '任意房间名' \
+  --network-secret '任意房间密钥' \
+  -p 'wss://<worker-domain>/'
+```
+
+没有服务器托管密钥时的安全保障：
+
+- 中继对 legacy 握手返回 32 字节全零 digest，客户端只校验其长度。
+- 中继在 OSPF 路由信息中广播 `is_public_server` 标志，因此客户端向中继发送明文控制 RPC，而节点间流量仍使用由网络密钥派生的加密。
+- 密钥不匹配的节点不会互相合并路由，房间在路由层面保持隔离。
 
 ## 工具链
 

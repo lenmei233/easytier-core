@@ -1,13 +1,20 @@
 import { DurableObject } from "cloudflare:workers";
 import { SecurePeer } from "./wasm";
-import { ENCRYPTED_FLAG, PacketType, SERVER_PEER_ID } from "./core/constants";
+import {
+	EASYTIER_HEADER_SIZE,
+	ENCRYPTED_FLAG,
+	PacketType,
+	SERVER_PEER_ID,
+} from "./core/constants";
 import { type EasyTierEnv, type ServerConfig, readServerConfig } from "./core/config";
 import {
 	createPong,
+	createPacket,
 	incrementForwardCounter,
 	parsePacket,
 	toUint8Array,
 } from "./core/packet";
+import { buildLegacyHandshakeResponse, parseLegacyHandshake } from "./core/legacy";
 import { EasyTierRpc } from "./core/rpc";
 import {
 	type Connection,
@@ -48,27 +55,13 @@ export class EasyTierServer extends DurableObject<EasyTierEnv> {
 			return new Response("EasyTier connection capacity exceeded", { status: 503 });
 		}
 
-		let secure: SecurePeer;
-		try {
-			secure = new SecurePeer(
-				this.config.localPrivateKey,
-				this.config.localPublicKey,
-				SERVER_PEER_ID,
-			);
-		} catch (error) {
-			console.error("EasyTier secure-mode key validation failed", {
-				error: errorMessage(error),
-			});
-			return new Response("Server secure-mode configuration is invalid", { status: 503 });
-		}
-
 		const pair = new WebSocketPair();
 		const client = pair[0];
 		const server = pair[1];
 		server.binaryType = "arraybuffer";
 		server.accept();
 
-		const connection = createConnection(server, secure, (expired) => {
+		const connection = createConnection(server, (expired) => {
 			this.close(expired, 4408, "secure handshake timeout");
 		});
 		this.connections.set(server, connection);
@@ -93,6 +86,9 @@ export class EasyTierServer extends DurableObject<EasyTierEnv> {
 		}
 		const packet = parsePacket(frame);
 		switch (connection.phase) {
+			case "undecided":
+				this.handleFirstPacket(connection, frame, packet.header.packetType);
+				return;
 			case "msg1":
 				this.handleHandshakeMessage1(connection, frame, packet.header.packetType);
 				return;
@@ -107,6 +103,56 @@ export class EasyTierServer extends DurableObject<EasyTierEnv> {
 		}
 	}
 
+	private handleFirstPacket(
+		connection: Connection,
+		frame: Uint8Array,
+		packetType: number,
+	): void {
+		if (packetType === PacketType.HandShake) {
+			if (!this.config.allowLegacy) {
+				throw new Error("legacy admission is disabled on this relay");
+			}
+			this.handleLegacyHandshake(connection, frame);
+			return;
+		}
+		if (packetType === PacketType.NoiseHandshakeMsg1) {
+			connection.secure = new SecurePeer(
+				this.config.localPrivateKey,
+				this.config.localPublicKey,
+				SERVER_PEER_ID,
+			);
+			connection.mode = "secure";
+			connection.phase = "msg1";
+			this.handleHandshakeMessage1(connection, frame, packetType);
+			return;
+		}
+		throw new Error("secure_mode rejects legacy or out-of-order handshakes");
+	}
+
+	private handleLegacyHandshake(connection: Connection, frame: Uint8Array): void {
+		const info = parseLegacyHandshake(frame.subarray(EASYTIER_HEADER_SIZE));
+		if (info.peerId === SERVER_PEER_ID) {
+			throw new Error("legacy peer id conflicts with the relay peer id");
+		}
+		connection.mode = "legacy";
+		connection.peerId = info.peerId;
+		connection.networkName = info.networkName;
+		const response = buildLegacyHandshakeResponse(SERVER_PEER_ID, info.networkName);
+		connection.send(
+			createPacket(SERVER_PEER_ID, info.peerId, PacketType.HandShake, response),
+		);
+		this.registerConnection(connection);
+		completeHandshake(connection);
+		this.broadcastRouteUpdate(connection.networkName);
+	}
+
+	private requireSecure(connection: Connection): SecurePeer {
+		if (connection.secure === null) {
+			throw new Error("secure handshake started without a secure peer context");
+		}
+		return connection.secure;
+	}
+
 	private handleHandshakeMessage1(
 		connection: Connection,
 		frame: Uint8Array,
@@ -115,7 +161,8 @@ export class EasyTierServer extends DurableObject<EasyTierEnv> {
 		if (packetType !== PacketType.NoiseHandshakeMsg1) {
 			throw new Error("secure_mode rejects legacy or out-of-order handshakes");
 		}
-		const info = parseHandshakeInfo(connection.secure.read_msg1(frame));
+		const secure = this.requireSecure(connection);
+		const info = parseHandshakeInfo(secure.read_msg1(frame));
 		const room = this.config.rooms.get(info.networkName);
 		if (room === undefined) {
 			this.close(connection, 4403, "network is not configured");
@@ -123,7 +170,7 @@ export class EasyTierServer extends DurableObject<EasyTierEnv> {
 		}
 		connection.peerId = info.peerId;
 		connection.networkName = info.networkName;
-		connection.send(connection.secure.build_msg2(room.network_secret));
+		connection.send(secure.build_msg2(room.network_secret));
 		connection.phase = "msg3";
 	}
 
@@ -135,7 +182,7 @@ export class EasyTierServer extends DurableObject<EasyTierEnv> {
 		if (packetType !== PacketType.NoiseHandshakeMsg3) {
 			throw new Error("expected NoiseHandshakeMsg3");
 		}
-		const auth = parseAuthenticationInfo(connection.secure.finish_msg3(frame));
+		const auth = parseAuthenticationInfo(this.requireSecure(connection).finish_msg3(frame));
 		if (
 			auth.peerId !== connection.peerId ||
 			auth.networkName !== connection.networkName
@@ -189,18 +236,26 @@ export class EasyTierServer extends DurableObject<EasyTierEnv> {
 			// 本节点没有本地 TUN；数据包和端到端中继握手只有发往其他节点时才有意义。
 			return;
 		}
-		if ((header.flags & ENCRYPTED_FLAG) === 0) {
-			throw new Error("secure_mode requires encrypted direct RPC packets");
+
+		let clearPayload: Uint8Array;
+		if (connection.mode === "secure") {
+			if ((header.flags & ENCRYPTED_FLAG) === 0) {
+				throw new Error("secure_mode requires encrypted direct RPC packets");
+			}
+			const clear = this.requireSecure(connection).decrypt_packet(frame);
+			if (clear.byteLength === 0) return;
+			clearPayload = parsePacket(clear).payload;
+		} else {
+			// 客户端尚未通过路由信息得知本节点是公共服务器时会发加密包，丢弃等待其重试。
+			if ((header.flags & ENCRYPTED_FLAG) !== 0) return;
+			clearPayload = packet.payload;
 		}
 
-		const clear = connection.secure.decrypt_packet(frame);
-		if (clear.byteLength === 0) return;
-		const clearPacket = parsePacket(clear);
 		if (header.packetType === PacketType.RpcReq) {
-			const result = this.rpc.handleRequest(connection, clearPacket.payload);
+			const result = this.rpc.handleRequest(connection, clearPayload);
 			if (result === "route") this.broadcastRouteUpdate(connection.networkName, connection.peerId);
 		} else {
-			this.rpc.handleResponse(connection, clearPacket.payload);
+			this.rpc.handleResponse(connection, clearPayload);
 		}
 	}
 
@@ -209,7 +264,11 @@ export class EasyTierServer extends DurableObject<EasyTierEnv> {
 		if (replaced && replaced !== connection) {
 			this.close(replaced, 4000, "replaced by an authenticated reconnect");
 		}
-		this.rpc.addPeer(connection);
+		if (connection.mode === "legacy") {
+			this.rpc.addLegacyPeer(connection);
+		} else {
+			this.rpc.addPeer(connection);
+		}
 	}
 
 	private removeConnection(connection: Connection): void {

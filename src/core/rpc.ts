@@ -43,6 +43,11 @@ export class EasyTierRpc {
 		this.routeSyncStates.delete(routeSyncKey(peer));
 	}
 
+	addLegacyPeer(peer: RpcPeer): void {
+		this.core.add_peer_legacy(peer.networkName, peer.peerId);
+		this.routeSyncStates.delete(routeSyncKey(peer));
+	}
+
 	removePeer(peer: RpcPeer): void {
 		this.core.remove_peer(peer.networkName, peer.peerId);
 		this.routeSyncStates.delete(routeSyncKey(peer));

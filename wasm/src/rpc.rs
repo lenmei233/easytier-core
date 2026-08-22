@@ -115,6 +115,12 @@ impl WasmRpcCore {
         Ok(())
     }
 
+    pub fn add_peer_legacy(&mut self, network: &str, peer_id: u32) {
+        self.routes.add_peer_legacy(network, peer_id);
+        self.peer_initiator
+            .insert((network.to_string(), peer_id), false);
+    }
+
     pub fn remove_peer(&mut self, network: &str, peer_id: u32) {
         self.routes.remove_peer(network, peer_id);
         self.peer_center.remove_peer(network, peer_id);

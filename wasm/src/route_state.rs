@@ -163,6 +163,15 @@ impl RouteState {
         Ok(())
     }
 
+    pub(crate) fn add_peer_legacy(&mut self, group_key: &str, peer_id: PeerId) {
+        let my_peer_id = self.my_peer_id;
+        let g = self.ensure_group(group_key);
+        let is_new = g.peers.insert(peer_id);
+        if is_new {
+            Self::bump_all_conn_versions(g, my_peer_id);
+        }
+    }
+
     pub(crate) fn remove_peer(&mut self, group_key: &str, peer_id: PeerId) {
         let my_peer_id = self.my_peer_id;
         let g = self.ensure_group(group_key);
@@ -425,14 +434,13 @@ impl RouteState {
                 if info.peer_id != from_peer_id {
                     continue;
                 }
-                let authenticated_key = g
-                    .authenticated_peer_keys
-                    .get(&from_peer_id)
-                    .ok_or_else(|| JsValue::from_str("route peer has no authenticated public key"))?;
-                if info.noise_static_pubkey.as_slice() != authenticated_key.as_slice() {
-                    return Err(JsValue::from_str(
-                        "RoutePeerInfo public key does not match the authenticated Noise identity",
-                    ));
+                // legacy 对等端没有 Noise 身份，未绑定公钥的节点跳过该校验
+                if let Some(authenticated_key) = g.authenticated_peer_keys.get(&from_peer_id) {
+                    if info.noise_static_pubkey.as_slice() != authenticated_key.as_slice() {
+                        return Err(JsValue::from_str(
+                            "RoutePeerInfo public key does not match the authenticated Noise identity",
+                        ));
+                    }
                 }
                 let is_new = !g.peer_infos.contains_key(&info.peer_id);
                 let instance_changed = g

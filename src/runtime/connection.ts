@@ -2,11 +2,13 @@ import { type RpcPeer } from "../core/rpc";
 import { WS_OPEN } from "../core/constants";
 import { type SecurePeer } from "../wasm";
 
-type ConnectionPhase = "msg1" | "msg3" | "ready" | "closed";
+export type ConnectionMode = "secure" | "legacy";
+type ConnectionPhase = "undecided" | "msg1" | "msg3" | "ready" | "closed";
 
 export interface Connection extends RpcPeer {
 	socket: WebSocket;
-	secure: SecurePeer;
+	secure: SecurePeer | null;
+	mode: ConnectionMode;
 	remotePublicKey: Uint8Array;
 	phase: ConnectionPhase;
 	handshakeTimer: ReturnType<typeof setTimeout> | null;
@@ -22,14 +24,14 @@ const MAX_SEND_FRAMES_PER_WINDOW = 4_096;
 
 export function createConnection(
 	socket: WebSocket,
-	secure: SecurePeer,
 	onHandshakeTimeout: (connection: Connection) => void,
 ): Connection {
 	const connection: Connection = {
 		socket,
-		secure,
+		secure: null,
+		mode: "secure",
 		remotePublicKey: new Uint8Array(),
-		phase: "msg1",
+		phase: "undecided",
 		peerId: 0,
 		networkName: "",
 		serverSessionId: randomU64(),
@@ -37,7 +39,8 @@ export function createConnection(
 		sendWindowStartedAt: Date.now(),
 		sentBytesInWindow: 0,
 		sentFramesInWindow: 0,
-		encrypt: (packet) => secure.encrypt_packet(packet),
+		encrypt: (packet) =>
+			connection.secure ? connection.secure.encrypt_packet(packet) : packet,
 		send: (packet) => sendConnection(connection, packet),
 	};
 	connection.handshakeTimer = setTimeout(
@@ -56,7 +59,7 @@ export function completeHandshake(connection: Connection): void {
 export function disposeConnection(connection: Connection): void {
 	if (connection.handshakeTimer !== null) clearTimeout(connection.handshakeTimer);
 	connection.handshakeTimer = null;
-	connection.secure.free();
+	connection.secure?.free();
 }
 
 function sendConnection(connection: Connection, packet: Uint8Array): void {
