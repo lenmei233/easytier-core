@@ -25,9 +25,9 @@ easytier-edge 中继的转发路径（client→edge→DO→edge→client）中�
 ## 影响
 - src/server.ts 热路径重构
 - src/core/packet.ts 新增纯TS函数
-- src/index.ts DO寻址逻辑
+- src/index.ts DO寻址逻辑 + healthz 暴露 colo/do_rtt_ms 观测字段
 - src/core/config.ts 新增 EASYTIER_DO_LOCATION 校验
-- wrangler.jsonc 默认 apac-ne
+- wrangler.jsonc 默认 apac-se，并移除 placement.smart（见修订记录 v1.1）
 - 部署后 DO 对象名将变化（旧实例自然废弃）
 - 每转发帧减少2次WASM边界穿越
 
@@ -35,3 +35,4 @@ easytier-edge 中继的转发路径（client→edge→DO→edge→client）中�
 | 日期 | 版本 | 修改内容 | 修改人 |
 |:---|:---|:---|:---|
 | 2026-08-22 | v1.0 | 初版创建 | AI Agent |
+| 2026-08-22 | v1.1 | 实测发现 placement.smart 会覆盖 locationHint（三种 hint 的 do_rtt 均 ~500ms）；移除 smart 后 do_rtt 从 ~500ms 降至 6ms。默认位置按入口 colo=SIN 实测定为 apac-se；中继端到端延迟 250ms→154ms（-40%） | AI Agent |

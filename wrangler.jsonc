@@ -22,10 +22,7 @@
 		"EASYTIER_HOSTNAME": "edge",
 		"MAX_FRAME_BYTES": "1048576",
 		"EASYTIER_ENABLE_LEGACY": "true",
-		"EASYTIER_DO_LOCATION": "apac-ne"
-	},
-	"placement": {
-		"mode": "smart"
+		"EASYTIER_DO_LOCATION": "apac-se"
 	},
 	"observability": {
 		"enabled": true

@@ -24,8 +24,19 @@ export default {
 					SERVER_PEER_ID,
 				);
 				validator.free();
+				const doStarted = Date.now();
+				// 任意路径都会往返一次 DO（404 也算），用于测量 Worker↔DO RTT
+				await env.EASYTIER_SERVER
+					.get(env.EASYTIER_SERVER.idFromName(durableObjectName(config.doLocation)))
+					.fetch("https://do-healthz-probe/");
 				return Response.json(
-					{ ok: true, secure_mode: true, networks: config.rooms.size },
+					{
+						ok: true,
+						secure_mode: true,
+						networks: config.rooms.size,
+						colo: request.cf?.colo,
+						do_rtt_ms: Date.now() - doStarted,
+					},
 					{ headers: { "cache-control": "no-store" } },
 				);
 			} catch (error) {
