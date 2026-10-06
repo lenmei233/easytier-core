@@ -1,8 +1,11 @@
-# EasyTier-Edge
+# EasyTier-Core (Fork from [EasyTier-Edge](https://github.com/fordes123/easytier-edge))
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
 [![CI](https://github.com/fordes123/easytier-edge/actions/workflows/ci.yml/badge.svg)](https://github.com/fordes123/easytier-edge/actions/workflows/ci.yml)
+
+> **New:** Public room support and Scaffolding-MC room-network protocol compatibility.  
+> Enable `EASYTIER_ENABLE_LEGACY=true` to serve dynamic, isolated rooms from one `wss://` endpoint — no per-room configuration required.
 
 **A secure EasyTier WebSocket relay running at the Cloudflare edge.**
 
@@ -27,6 +30,8 @@ Packets addressed to the relay are authenticated, decrypted, and processed by th
 
 ## Properties
 
+- **Public rooms (new):** Dynamic public rooms are created on demand from the client's `network_name` when legacy mode is enabled. One relay can serve any number of isolated rooms.
+- **Scaffolding-MC room-network protocol compatibility (new):** Scaffolding-MC room networks can connect through the same public-room path without `--secure-mode`; room access is controlled by `network_name` + `network_secret`.
 - Multiple isolated EasyTier networks behind one `wss://` endpoint
 - Noise XX authentication with network-secret proof
 - AES-GCM and ChaCha20-Poly1305 authenticated encryption
@@ -36,7 +41,7 @@ Packets addressed to the relay are authenticated, decrypted, and processed by th
 - Periodic OSPF session maintenance and route-version refresh
 - Bounded RPC fragmentation, transaction tracking, and anti-replay state
 - Frame, hop, and outbound-capacity limits on the relay path
-- Opt-in legacy admission for plain EasyTier clients and dynamic public rooms
+- Opt-in legacy admission for plain EasyTier clients, public rooms, and Scaffolding-MC room networks
 - No cross-network state
 
 ## Deploy
@@ -48,6 +53,8 @@ The deployment requires three secrets:
 - `EASYTIER_NETWORKS`
 - `LOCAL_PRIVATE_KEY`
 - `LOCAL_PUBLIC_KEY`
+
+For public-room or Scaffolding-MC deployments, also set `EASYTIER_ENABLE_LEGACY=true`. In that mode, `EASYTIER_NETWORKS` may be an empty array, for example `[]`.
 
 Generate the X25519 server identity before deployment:
 
@@ -79,16 +86,26 @@ LOCAL_PUBLIC_KEY=<base64-encoded-32-byte-public-key>
 EASYTIER_HOSTNAME=edge
 ```
 
+To enable public rooms and Scaffolding-MC room networks locally:
+
+```dotenv
+EASYTIER_NETWORKS=[]
+EASYTIER_ENABLE_LEGACY=true
+LOCAL_PRIVATE_KEY=<base64-encoded-32-byte-private-key>
+LOCAL_PUBLIC_KEY=<base64-encoded-32-byte-public-key>
+EASYTIER_HOSTNAME=edge
+```
+
 ## Configuration
 
 | Variable | Required | Contract |
 | --- | --- | --- |
-| `EASYTIER_NETWORKS` | Yes | Non-empty JSON array containing unique `network_name` and non-empty `network_secret` values. |
+| `EASYTIER_NETWORKS` | Conditional | JSON array containing unique `network_name` and non-empty `network_secret` values. Required in secure-only mode. When legacy/public-room mode is enabled, this may be an empty array. |
 | `LOCAL_PRIVATE_KEY` | Yes | Base64-encoded 32-byte X25519 private key. |
 | `LOCAL_PUBLIC_KEY` | Yes | Matching Base64-encoded 32-byte X25519 public key. |
 | `EASYTIER_HOSTNAME` | No | Advertised hostname; defaults to `edge`, maximum 255 UTF-8 bytes. |
 | `MAX_FRAME_BYTES` | No | Frame limit; defaults to 1 MiB, allowed range 1 KiB–16 MiB. |
-| `EASYTIER_ENABLE_LEGACY` | No | Set to `true` to admit plain (non-secure-mode) EasyTier clients into dynamic rooms. When enabled, `EASYTIER_NETWORKS` may be empty. |
+| `EASYTIER_ENABLE_LEGACY` | No | Set to `true` to enable **public rooms** and **Scaffolding-MC room-network compatibility**. Plain (non-secure-mode) EasyTier clients are admitted into rooms created on demand from their `network_name`. When enabled, `EASYTIER_NETWORKS` may be empty. |
 
 Set production credentials through Wrangler:
 
@@ -98,7 +115,16 @@ pnpm exec wrangler secret put LOCAL_PRIVATE_KEY
 pnpm exec wrangler secret put LOCAL_PUBLIC_KEY
 ```
 
+For public-room or Scaffolding-MC deployments:
+
+```bash
+pnpm exec wrangler secret put EASYTIER_ENABLE_LEGACY
+# value: true
+```
+
 ## Connect a peer
+
+Secure mode is the recommended default:
 
 ```bash
 easytier-core \
@@ -114,9 +140,20 @@ Peers sharing a network must use the same network credentials. Networks configur
 
 Only peers that complete `NetworkSecretConfirmed` authentication are admitted. Legacy plaintext and credential-only admission are intentionally rejected by this deployment model unless legacy mode is enabled.
 
-## Legacy mode
+For public rooms or Scaffolding-MC room networks, see below.
 
-Set `EASYTIER_ENABLE_LEGACY=true` to also admit plain EasyTier clients that connect without `--secure-mode`. Rooms are created on demand from the client's `network_name`, so no per-network configuration is required — one relay can serve any number of dynamic rooms (for example [Scaffolding-MC](https://github.com/Scaffolding-MC/Scaffolding-MC) room networks).
+## Public rooms, legacy mode, and Scaffolding-MC support
+
+Set `EASYTIER_ENABLE_LEGACY=true` to also admit plain EasyTier clients that connect without `--secure-mode`.
+
+**New in this fork:**
+
+- **Public rooms** are created on demand from the client's `network_name`.
+- One relay can serve any number of dynamic rooms.
+- No per-room Worker configuration is required.
+- **Scaffolding-MC room networks** are supported through the same public-room path, for example [Scaffolding-MC](https://github.com/Scaffolding-MC/Scaffolding-MC) room networks.
+
+### Connect a public room
 
 ```bash
 easytier-core \
@@ -125,11 +162,27 @@ easytier-core \
   -p 'wss://<worker-domain>/'
 ```
 
-How it stays secure without a server-held secret:
+No `--secure-mode` and no per-room Worker configuration are needed.
+
+### Connect a Scaffolding-MC room network
+
+Use the Scaffolding-MC room name as `--network-name` and the room secret as `--network-secret`:
+
+```bash
+easytier-core \
+  --network-name '<scaffolding-mc-room-name>' \
+  --network-secret '<scaffolding-mc-room-secret>' \
+  -p 'wss://<worker-domain>/'
+```
+
+The relay creates the room on demand and keeps it isolated from other rooms.
+
+### How it stays secure without a server-held secret
 
 - The relay answers the legacy handshake with a zero digest; clients only validate its length.
 - The relay advertises `is_public_server` in OSPF route info, so clients send plaintext control RPC to the relay while peer-to-peer traffic stays encrypted with keys derived from the network secret.
 - Peers with mismatched secrets never merge routes, so rooms remain isolated at the routing layer.
+- Public rooms and Scaffolding-MC room networks do not share routing, discovery, RPC, or forwarding state with other rooms.
 
 ## Toolchain
 
@@ -149,6 +202,8 @@ How it stays secure without a server-held secret:
 - Maximum simultaneous WebSocket connections per Durable Object: 2048
 - The Worker has no local TUN interface and opens no UDP hole-punch sockets; it relays the control RPC that lets clients punch paths directly between themselves.
 - Session and anti-replay state live in a non-hibernating Durable Object.
+- Public rooms are created dynamically from `network_name` when `EASYTIER_ENABLE_LEGACY=true`.
+- Scaffolding-MC room networks are supported through the public-room path.
 - Protobuf schemas are copied verbatim from EasyTier 2.6.4 under `easytier/src/proto`.
 
 ## License
