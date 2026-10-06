@@ -4,6 +4,10 @@
 
 [![CI](https://github.com/fordes123/easytier-edge/actions/workflows/ci.yml/badge.svg)](https://github.com/fordes123/easytier-edge/actions/workflows/ci.yml)
 
+此项目由[EasyTier-Edge](https://github.com/fordes123/easytier-edge) 修改而来，主要为了适配`Scaffolding-MC`房间网络协议 并且进行了`中继延迟优化`皆在为低成本的为 `MC 公益联机服务`提供支持
+
+已用于[Qomicex Launcher](https://github.com/Qomicex-Public/Qomicex.Tauri)
+
 > **新增：** 公开房间支持与 Scaffolding-MC 房间网络协议兼容。  
 > 启用 `EASYTIER_ENABLE_LEGACY=true` 后，可通过单个 `wss://` 端点提供动态、相互隔离的房间，无需按房间单独配置。
 
